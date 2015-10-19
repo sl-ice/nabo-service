@@ -129,7 +129,6 @@
 
 (defn select-region [region]
   (alia/execute session
-
                 (hayt/select :ice.salg (hayt/where {:region region}))))
 
 (defn find-alle-salg [long lat]
