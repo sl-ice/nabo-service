@@ -8,5 +8,6 @@
                  [com.taoensso/nippy "2.10.0"]
                  [org.clojure/data.csv "0.1.3"]
                  [cc.qbits/alia "2.10.0"]
-                 [cc.qbits/hayt "3.0.0-rc2"]]
+                 [cc.qbits/hayt "3.0.0-rc2"]
+                 [knn "0.1.3"]]
   :main kafka-nabo-service.core)

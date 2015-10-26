@@ -6,38 +6,24 @@
             [clojure.data.csv :as csv]
             [clojure.java.io :as io]
             [qbits.alia :as alia]
-            [qbits.hayt :as hayt])
+            [qbits.hayt :as hayt]
+            [knn.core :refer :all]
+            [knn.distance :refer :all])
   (:import (kafka.consumer KafkaStream)
            (java.math BigDecimal)))
 
+
+(def neighbors 20)
+
 (def config {"zookeeper.connect" "localhost:2181"
-             "group.id" "clj-kafka.consumer"
-             "auto.offset.reset" "smallest"
-             "auto.commit.enable" "false"})
+             "group.id" "nabo"
+             "auto.offset.reset" "largest"
+             "auto.commit.enable" "true"
+             "auto.commit.interval.ms" "100"})
 
 (defn produce [msg topic]
   (with-open [p (p/producer {"bootstrap.servers" "127.0.0.1:9092"} (p/byte-array-serializer) (p/byte-array-serializer))]
-    (p/send p (p/record topic (n/freeze msg {:compressor nil})))))
-
-(defrecord KafkaMessage [topic offset partition key value-bytes])
-
-(defn- find-naboer [vur-ejd]
-  (prn "Find naboer for " vur-ejd)
-  {:vur-ejd-id (:vur-ejd-id vur-ejd)
-   :naboer [{:vur-ejd-id 91829 :vaegt 0.1} {:vur-ejd-id 90912019 :vaegt 0.2} {:vur-ejd-id 12912 :vaegt 0.2} {:vur-ejd-id 912012 :vaegt 0.15} {:vur-ejd-id 812398 :vaegt 0.05} {:vur-ejd-id 892319 :vaegt 0.05} {:vur-ejd-id 973282 :vaegt 0.06} {:vur-ejd-id 713929 :vaegt 0.19}]})
-
-(defn -main
-  "Laeser ejendomme der skal vurderes, finder naboerne, og poster dem i naboer topic"
-  [group-id-number]
-  (c/with-resource [c (cz/consumer (assoc config "group.id" (str "nabo-" group-id-number)))]
-    cz/shutdown
-    (let [stream (cz/create-message-stream c "vurder2")
-          it (.iterator ^KafkaStream stream)]
-      (while (.hasNext it)
-        (as-> (.next it) msg
-              (KafkaMessage. (.topic msg) (.offset msg) (.partition msg) (.key msg) (.message msg))
-              (find-naboer (n/thaw (:value-bytes msg)))
-              (produce msg "naboer"))))))
+    (p/send p (p/record topic (int (Math/round (rand 49))) nil (n/freeze msg {:compressor nil})))))
 
 (def km-mellem-grader 111.16)
 
@@ -124,7 +110,6 @@
       (doall (pmap #(insert-row %) input)))))
 
 (defn konverter-til-cassandra-format [regioner]
-  (prn regioner)
   (mapv #(konverter-region-til-cassandra-format %) regioner))
 
 (defn select-region [region]
@@ -136,3 +121,33 @@
                      find-naermeste-regioner
                      konverter-til-cassandra-format)]
     (flatten (doall (pmap #(select-region %) regioner)))))
+
+(defrecord KafkaMessage [topic offset partition key value-bytes])
+
+(def e {:vur-ejd-id 81728 :long 12.539648078 :lat 55.845189347 :ejd-kvm 85 :grund-kvm 400})
+
+(defn check-salg [a knn] (some #(= a %) knn))
+
+(defn find-naboer [vur-ejd]
+  (prn "Find naboer for " vur-ejd)
+  (let [salg (find-alle-salg (:long vur-ejd) (:lat vur-ejd))
+        _ (prn "Antal" (count salg))
+        salgs-observationer (mapv #(struct observation (:vur_ejd_id %) [(:long %) (:lat %) (:ejd_kvm %) (:grund_kvm %)]) salg)
+        knn (nearest-neighbors (struct observation (:vur-ejd-id vur-ejd) [(:long vur-ejd) (:lat vur-ejd) (:ejd-kvm vur-ejd) (:grund-kvm vur-ejd)]) salgs-observationer euclidean-distance 20)
+        knn-ids (mapv :label knn)]
+    {:vur-ejd-id (:vur-ejd-id vur-ejd)
+     :naboer (mapv #(dissoc % :region) (filter #(check-salg (:vur_ejd_id %) knn-ids) salg))}))
+
+(defn -main
+  "Laeser ejendomme der skal vurderes, finder naboerne, og poster dem i naboer topic"
+  []
+  (c/with-resource [c (cz/consumer config)]
+    cz/shutdown
+    (let [stream (cz/create-message-stream c "vurder")
+          it (.iterator ^KafkaStream stream)]
+      (while (.hasNext it)
+        (as-> (.next it) msg
+              (do (prn (.topic msg) (.offset msg) (.partition msg))
+                  (KafkaMessage. (.topic msg) (.offset msg) (.partition msg) (.key msg) (.message msg)))
+              (find-naboer (n/thaw (:value-bytes msg)))
+              (produce msg "naboer"))))))
